@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engine Tests</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, Menlo, monospace; padding: 16px; background: #fff; color: #111; }
+  .pass { color: #0a7a3b; } .fail { color: #c0182f; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Engine tests</h1>
+<pre id="out">running…</pre>
+<script type="module">
+import { HIDDEN, canPour, applyPour, isWon, hasMoves, isComplete, topRun, solve, cloneState } from './js/engine.js';
+import { levelConfig, dailyConfig, buildLevel, prevDayKey } from './js/levels.js';
+
+const lines = []; let failed = 0;
+const log = (s) => lines.push(s);
+function ok(cond, name) { if (cond) log(`<span class="pass">✓</span> ${name}`); else { failed++; log(`<span class="fail">✗ ${name}</span>`); } }
+const S = (tubes, cap = 4, frozen) => ({ cap, tubes, frozen: frozen || tubes.map(() => false) });
+
+// --- rules
+let s = S([[0, 1, 1], [2, 1], [], [0, 0, 0, 0]]);
+ok(canPour(s, 0, 1), 'pour onto matching top');
+ok(canPour(s, 0, 2), 'pour into empty');
+ok(!canPour(s, 2, 0), 'cannot pour from empty');
+ok(!canPour(s, 3, 2), 'cannot pour from completed tube');
+ok(!canPour(s, 1, 3), 'cannot pour into full tube');
+ok(!canPour(S([[0], [1]]), 0, 1), 'cannot pour onto different color');
+ok(topRun([0, 1, 1]) === 2, 'topRun counts same-color run');
+ok(topRun([1, 1 | HIDDEN, 1]) === 1, 'topRun stops at hidden layer');
+
+s = S([[0, 1, 1], [2, 1], [], []]);
+let r = applyPour(s, 0, 1);
+ok(r.amount === 2 && s.tubes[1].join() === '2,1,1,1' && s.tubes[0].join() === '0', 'pour moves whole run that fits');
+s = S([[1, 1, 1], [2, 2, 1], [], []]);
+r = applyPour(s, 0, 1);
+ok(r.amount === 1 && s.tubes[0].length === 2, 'partial pour when target has little room');
+
+s = S([[2 | HIDDEN, 0], [0, 0, 0], [], []]);
+r = applyPour(s, 0, 1);
+ok(r.revealed && s.tubes[0][0] === 2, 'hidden layer revealed when uncovered');
+ok(r.completed.includes(1), 'completion detected');
+
+s = S([[0 | HIDDEN, 0 | HIDDEN, 0], [0], [1, 2, 1, 2], []], 4, [false, false, true, false]);
+ok(!canPour(s, 2, 3) && !canPour(s, 1, 2), 'frozen tube is locked both ways');
+r = applyPour(s, 1, 0);
+ok(r.completed.length === 1 && s.tubes[0].every((l) => l === 0), 'completed tube is fully revealed');
+ok(r.thawed.includes(2) && !s.frozen[2], 'frozen tube thaws on first completion');
+
+ok(isWon(S([[0, 0, 0, 0], [], [1, 1, 1, 1]])), 'win detection');
+ok(!isWon(S([[0, 0, 0, 1], [1, 1, 1, 0]])), 'not won when mixed');
+ok(!hasMoves(S([[0, 1, 0, 1], [1, 0, 1, 0]])), 'no moves detected');
+
+// --- solver
+ok(solve(S([[0, 1], [1, 0]], 2)) === null, 'solver reports unsolvable');
+const simple = S([[0, 1, 0, 1], [1, 0, 1, 0], [], []]);
+const path = solve(simple);
+ok(Array.isArray(path), 'solver solves simple puzzle');
+{ const t = cloneState(simple); for (const [a, b] of path) { if (!canPour(t, a, b)) { ok(false, 'solver path legal'); break; } applyPour(t, a, b); } ok(isWon(t), 'solver path wins'); }
+ok(prevDayKey('2026-03-01') === '2026-02-28', 'prevDayKey across months');
+
+// --- generation: every level solvable by replaying the solver's path, plus timing
+function verify(cfg, label) {
+  const t0 = performance.now();
+  const { state, par } = buildLevel(cfg);
+  const ms = performance.now() - t0;
+  const p = solve(state, { maxNodes: 400000 });
+  let good = Array.isArray(p);
+  if (good) { const t = cloneState(state); for (const [a, b] of p) { if (!canPour(t, a, b)) { good = false; break; } applyPour(t, a, b); } good = good && isWon(t); }
+  const again = buildLevel(cfg).state;
+  const deterministic = JSON.stringify(again) === JSON.stringify(state);
+  return { good, deterministic, ms, par, label };
+}
+const results = [];
+for (let n = 1; n <= 260; n++) results.push(verify(levelConfig(n), 'L' + n));
+for (let d = 1; d <= 30; d++) results.push(verify(dailyConfig(`2026-12-${String(d).padStart(2, '0')}`), 'D' + d));
+const bad = results.filter((x) => !x.good || !x.deterministic);
+ok(bad.length === 0, `260 levels + 30 dailies generate solvable & deterministic (${bad.map((b) => b.label).join(',') || 'all good'})`);
+const slow = results.slice().sort((a, b) => b.ms - a.ms).slice(0, 5);
+log(`slowest generation: ${slow.map((x) => `${x.label} ${x.ms.toFixed(0)}ms`).join(', ')}`);
+log(`avg generation: ${(results.reduce((a, x) => a + x.ms, 0) / results.length).toFixed(1)}ms`);
+log(`par samples: ${[1, 5, 20, 40, 80, 120, 160, 220, 260].map((n) => `L${n}=${results[n - 1].par}`).join(' ')}`);
+
+// --- hint speed on a hard level
+{ const st = buildLevel(levelConfig(240)).state; const t0 = performance.now(); const h = solve(st, { maxNodes: 60000 }); log(`hint on L240: ${(performance.now() - t0).toFixed(0)}ms, ${Array.isArray(h) ? 'found' : String(h)}`); }
+
+log(failed ? `\n<span class="fail">${failed} FAILED</span>` : `\n<span class="pass">ALL PASSED</span>`);
+document.getElementById('out').innerHTML = lines.join('\n');
+window.__testsDone = { failed };
+</script>
+</body>
+</html>
