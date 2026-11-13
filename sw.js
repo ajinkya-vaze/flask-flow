@@ -1,6 +1,6 @@
 // Offline support: cache the whole app on first visit, then serve from cache.
 // Bump VERSION whenever any file changes so phones pick up the update.
-const VERSION = 'flaskflow-v1';
+const VERSION = 'flaskflow-v2';
 const ASSETS = [
   './',
   './index.html',

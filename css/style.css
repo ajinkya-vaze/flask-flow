@@ -472,5 +472,23 @@ body.cb .layer:not(.hidden)::after {
 .setting small { display: block; color: var(--muted); font-weight: 500; font-size: 12px; }
 .setting input { width: 46px; height: 26px; accent-color: var(--accent); flex: none; }
 
+.save-note { color: var(--muted); font-size: 13px; line-height: 1.4; margin-top: 8px; }
+.code-label { display: block; text-align: left; font-weight: 700; font-size: 14px; margin: 16px 0 6px; }
+textarea.code {
+  width: 100%;
+  resize: none;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(128, 128, 160, 0.35);
+  background: var(--btn);
+  color: var(--text);
+  font: 12px/1.4 ui-monospace, Menlo, monospace;
+  word-break: break-all;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.modal-card .modal-actions:has(+ .code-label) { margin-top: 10px; }
+#modal .modal-card { max-height: calc(100dvh - 32px); overflow-y: auto; }
+
 #fx { position: fixed; inset: 0; pointer-events: none; z-index: 90; overflow: hidden; }
 .particle { position: absolute; border-radius: 2px; }

@@ -4,7 +4,7 @@ import {
 import { levelConfig, dailyConfig, buildLevel, todayKey, prevDayKey, formatDayKey } from './levels.js';
 import { sfx, unlockAudio, setSoundEnabled } from './audio.js';
 import { haptic, setHapticsEnabled } from './haptics.js';
-import { loadStore, saveStore, defaultStore } from './storage.js';
+import { loadStore, saveStore, defaultStore, requestPersistence, exportCode, importCode } from './storage.js';
 
 // Ordered so that the first few colors (used in early levels) are the most distinct.
 const COLORS = [
@@ -29,7 +29,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
  *  clock pauses while the app is in the background, which must not lock the game). */
 const played = (anim, ms) => Promise.race([anim.finished.catch(() => {}), wait(ms + 150)]);
 
-let store = loadStore();
+let store = defaultStore(); // replaced by the saved copy in init()
+let storeLoaded = false; // never write before the saved copy has been read
 let game = null;
 let tubeEls = [];
 let layout = { tw: 40, lh: 36, th: 150 };
@@ -41,7 +42,7 @@ let hintTimer = null;
 // ================================================================ utilities
 
 function persistStore() {
-  saveStore(store);
+  if (storeLoaded) saveStore(store);
 }
 
 function persistGame() {
@@ -677,12 +678,15 @@ function openSettings() {
        ${row('haptics', 'Haptics', 'iPhone with iOS 18 or later')}
        ${row('cb', 'Color-blind symbols', 'Adds a shape to every color')}
      </div>
+     <p class="save-note">Progress is saved automatically on this device.</p>
      <div class="modal-actions">
        <button class="btn primary" data-act="close">Done</button>
+       <button class="btn" data-act="backup">Backup &amp; restore</button>
        <button class="btn danger small" data-act="reset" id="reset-btn">Reset all progress</button>
      </div>`,
     {
       close: closeModal,
+      backup: openBackup,
       reset: (btn) => {
         if (btn.dataset.armed) {
           const settings = store.settings;
@@ -706,6 +710,58 @@ function openSettings() {
       persistStore();
     });
   });
+}
+
+function openBackup() {
+  const code = exportCode(store);
+  openModal(
+    `<h2>Backup &amp; restore</h2>
+     <p class="save-note">Safari and the Home Screen app keep separate saves. Copy your code in one and
+       restore it in the other to move your progress, or keep it somewhere safe as a backup.</p>
+     <label class="code-label">Your save code (Level ${store.level})</label>
+     <textarea class="code" id="code-out" readonly rows="3">${code}</textarea>
+     <div class="modal-actions">
+       <button class="btn" data-act="copy">Copy code</button>
+     </div>
+     <label class="code-label">Restore from a code</label>
+     <textarea class="code" id="code-in" rows="3" placeholder="Paste a save code here" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
+     <div class="modal-actions">
+       <button class="btn" data-act="restore">Restore</button>
+       <button class="btn primary" data-act="close">Done</button>
+     </div>`,
+    {
+      close: closeModal,
+      copy: async () => {
+        const out = $('#code-out');
+        try {
+          await navigator.clipboard.writeText(out.value);
+          toast('Save code copied');
+        } catch {
+          out.focus();
+          out.select();
+          toast('Select the code and copy it');
+        }
+      },
+      restore: (btn) => {
+        const next = importCode($('#code-in').value);
+        if (!next) {
+          toast("That doesn't look like a save code");
+          return;
+        }
+        if (!btn.dataset.armed && next.level < store.level) {
+          btn.dataset.armed = '1';
+          btn.textContent = `Tap again: go back to Level ${next.level}?`;
+          return;
+        }
+        store = next;
+        persistStore();
+        applySettings();
+        closeModal();
+        renderHome();
+        toast(`Progress restored: Level ${store.level}`);
+      },
+    }
+  );
 }
 
 // ================================================================ wiring
@@ -753,17 +809,21 @@ function bind() {
       renderBoard();
     }, 150);
   });
+  // iOS may kill a backgrounded Home Screen app without warning: save on the way out.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') persistGame();
+    if (document.visibilityState === 'hidden') game ? persistGame() : persistStore();
   });
+  window.addEventListener('pagehide', () => (game ? persistGame() : persistStore()));
 }
 
-function init() {
-  applySettings();
+async function init() {
   renderHero();
   bind();
+  store = await loadStore();
+  storeLoaded = true;
+  applySettings();
   renderHome();
-  navigator.storage?.persist?.().catch(() => {});
+  requestPersistence();
   if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
     window.__flask = {
       startGame,
