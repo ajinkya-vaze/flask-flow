@@ -26,6 +26,7 @@ A calm, ad-free liquid-sort puzzle for iPhone. It plays like the genre you enjoy
 | Selecting | Tap a flask to lift it. Tap it again to put it down. |
 | Pouring | Tap a target. The whole run of same-colored layers on top moves over, as much as fits. |
 | Valid pour | Target is empty, **or** its top color matches and it has room |
+| Leftovers | If the tapped flask fills up before the run is used up, the rest pours on to other flasks already topped with that color (the one with the most room first, never an empty flask). It counts as one move and one Undo. Can be turned off in Settings ("Pour leftovers"). |
 | Invalid pour | The flask shakes with a light haptic. Nothing changes. |
 | Completed flask | Full with one color. It gets a cork, a sparkle and a haptic, then it is locked. |
 | Win | Every flask is either empty or completed |

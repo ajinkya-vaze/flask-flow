@@ -1,5 +1,5 @@
 import {
-  cloneState, canPour, applyPour, isComplete, isWon, hasMoves, isHidden, colorOf, solve,
+  cloneState, canPour, applyPour, isComplete, isWon, hasMoves, isHidden, colorOf, solve, topRun, spillTarget,
 } from './engine.js';
 import { levelConfig, dailyConfig, buildLevel, todayKey, prevDayKey, formatDayKey } from './levels.js';
 import { sfx, unlockAudio, setSoundEnabled } from './audio.js';
@@ -330,30 +330,48 @@ function onTubeTap(i) {
 
 function doPour(i, j) {
   const s = game.state;
-  const dstLenBefore = s.tubes[j].length;
   game.selected = -1;
-  game.history.push(cloneState(s));
-  const res = applyPour(s, i, j);
+  game.history.push(cloneState(s)); // the whole move (all legs) is one undo step
+
+  // Each leg is one pour from i. If the tapped flask can't hold the whole run,
+  // the rest goes on to other flasks already topped with that color.
+  const legs = [];
+  const pour = (k) => {
+    const before = s.tubes[k].length;
+    const res = applyPour(s, i, k);
+    legs.push({ j: k, before, res });
+    return res.amount;
+  };
+  let left = topRun(s.tubes[i]) - pour(j);
+  if (store.settings.autoPour) {
+    const skip = (k) => k === i || busy.has(k) || legs.some((l) => l.j === k);
+    for (let k; left > 0 && (k = spillTarget(s, i, left, skip)) >= 0; ) left -= pour(k);
+  }
   updateHud();
   persistGame();
 
   track(
-    animatePour(i, j, res, dstLenBefore).then(() => {
+    animatePour(i, legs).then(() => {
       if (!game || !tubeEls[i]) return;
       renderTube(i);
-      renderTube(j);
-      if (res.revealed) {
+      legs.forEach((l) => renderTube(l.j));
+      if (legs.some((l) => l.res.revealed)) {
         const top = tubeEls[i].querySelector('.liquid').lastElementChild;
         top?.classList.add('reveal');
       }
-      if (res.completed.length && isComplete(game.state.tubes[j], s.cap)) {
-        tubeEls[j].classList.add('just-done');
-        sfx.complete();
-        sparkle(j);
-      }
-      if (res.thawed.length) {
+      let done = false;
+      legs.forEach(({ j: k, res }) => {
+        if (res.completed.length && isComplete(game.state.tubes[k], s.cap)) {
+          tubeEls[k].classList.add('just-done');
+          sparkle(k);
+          done = true;
+        }
+      });
+      if (done) sfx.complete();
+      const thawed = legs.flatMap((l) => l.res.thawed);
+      if (thawed.length) {
         sfx.thaw();
-        res.thawed.forEach((k) => {
+        thawed.forEach((k) => {
           tubeEls[k].classList.add('thawing');
           setTimeout(() => game && tubeEls[k] && renderTube(k), 450);
         });
@@ -373,74 +391,86 @@ function doPour(i, j) {
 
 // ================================================================ pour animation
 
-async function animatePour(i, j, res, dstLenBefore) {
+/** legs: [{ j, before, res }] — the source visits each target in turn, then returns. */
+async function animatePour(i, legs) {
   const src = tubeEls[i];
-  const dst = tubeEls[j];
   const board = $('#board');
   busy.add(i);
-  busy.add(j);
+  legs.forEach((l) => busy.add(l.j));
   src.classList.remove('selected');
 
   const { tw, lh, th } = layout;
   const sx = src.offsetLeft, sy = src.offsetTop;
-  const dx = dst.offsetLeft, dy = dst.offsetTop;
   // Tip past horizontal so the mouth is lower than the base. The body swings
-  // toward the screen side with more room (dir 1 = body to the left).
-  const dir = dx + tw / 2 > board.clientWidth / 2 ? 1 : -1;
+  // toward the screen side with more room (dir 1 = body to the left). One
+  // direction for the whole move, so the flask never flips between targets.
+  const first = tubeEls[legs[0].j];
+  const dir = first.offsetLeft + tw / 2 > board.clientWidth / 2 ? 1 : -1;
   const angle = dir * 104;
   const rad = (angle * Math.PI) / 180;
   // Rotation pivots on the mouth's center. Place the pouring lip above the target's mouth.
   const lipX = (tw / 2) * Math.cos(rad) * dir;
   const lipY = (tw / 2) * Math.abs(Math.sin(rad));
   const hover = 26 + lipY;
-  const tx = dx - sx - lipX * 0.6;
-  const ty = dy - sy - hover;
 
   src.style.zIndex = 20;
-  const lift = 'translate(0px, -22px) rotate(0deg)';
-  const over = `translate(${tx}px, ${ty}px) rotate(${angle}deg)`;
-  const tilted = `translate(${tx}px, ${ty}px) rotate(${angle * 1.1}deg)`;
   const ease = 'cubic-bezier(.3,.7,.3,1)';
+  const srcLayers = [...src.querySelectorAll('.layer')];
+  let from = 'translate(0px, -22px) rotate(0deg)';
+  let poured = 0;
 
-  await played(src.animate([{ transform: lift }, { transform: over }], { duration: 230, easing: ease, fill: 'forwards' }), 230);
+  for (const { j, before, res } of legs) {
+    const dst = tubeEls[j];
+    const dx = dst.offsetLeft, dy = dst.offsetTop;
+    const tx = dx - sx - lipX * 0.6;
+    const ty = dy - sy - hover;
+    const over = `translate(${tx}px, ${ty}px) rotate(${angle}deg)`;
+    const tilted = `translate(${tx}px, ${ty}px) rotate(${angle * 1.1}deg)`;
 
-  sfx.pour(res.amount);
-  const pourDur = 230 + 70 * res.amount;
-  const sw = Math.max(4, tw * 0.16);
-  const streamTop = dy - 26;
-  const surface = dy + th - dstLenBefore * lh;
-  const stream = document.createElement('div');
-  stream.className = 'stream';
-  Object.assign(stream.style, {
-    left: dx + tw / 2 - sw / 2 + 'px',
-    top: streamTop + 'px',
-    width: sw + 'px',
-    height: Math.max(0, surface - streamTop) + 'px',
-    background: COLORS[res.color],
-  });
-  board.append(stream);
-  stream.animate([{ transform: 'scaleY(0)' }, { transform: 'scaleY(1)' }], { duration: 90, fill: 'forwards' });
+    await played(src.animate([{ transform: from }, { transform: over }], { duration: 230, easing: ease, fill: 'forwards' }), 230);
 
-  src.animate([{ transform: over }, { transform: tilted }], { duration: pourDur, fill: 'forwards' });
-  const outgoing = [...src.querySelectorAll('.layer')].slice(-res.amount);
-  outgoing.forEach((el) => el.animate([{ height: lh + 'px' }, { height: '0px' }], { duration: pourDur, fill: 'forwards' }));
-  const liq = dst.querySelector('.liquid');
-  for (let k = 0; k < res.amount; k++) {
-    const el = makeLayer(res.color);
-    el.style.height = '0px';
-    liq.append(el);
-    el.animate([{ height: '0px' }, { height: lh + 'px' }], {
-      duration: pourDur / res.amount,
-      delay: 70 + (k * pourDur) / res.amount,
-      fill: 'forwards',
+    sfx.pour(res.amount);
+    const pourDur = 230 + 70 * res.amount;
+    const sw = Math.max(4, tw * 0.16);
+    const streamTop = dy - 26;
+    const surface = dy + th - before * lh;
+    const stream = document.createElement('div');
+    stream.className = 'stream';
+    Object.assign(stream.style, {
+      left: dx + tw / 2 - sw / 2 + 'px',
+      top: streamTop + 'px',
+      width: sw + 'px',
+      height: Math.max(0, surface - streamTop) + 'px',
+      background: COLORS[res.color],
     });
+    board.append(stream);
+    stream.animate([{ transform: 'scaleY(0)' }, { transform: 'scaleY(1)' }], { duration: 90, fill: 'forwards' });
+
+    src.animate([{ transform: over }, { transform: tilted }], { duration: pourDur, fill: 'forwards' });
+    const end = srcLayers.length - poured;
+    srcLayers
+      .slice(end - res.amount, end)
+      .forEach((el) => el.animate([{ height: lh + 'px' }, { height: '0px' }], { duration: pourDur, fill: 'forwards' }));
+    poured += res.amount;
+    const liq = dst.querySelector('.liquid');
+    for (let k = 0; k < res.amount; k++) {
+      const el = makeLayer(res.color);
+      el.style.height = '0px';
+      liq.append(el);
+      el.animate([{ height: '0px' }, { height: lh + 'px' }], {
+        duration: pourDur / res.amount,
+        delay: 70 + (k * pourDur) / res.amount,
+        fill: 'forwards',
+      });
+    }
+
+    await wait(pourDur + 80);
+    await played(stream.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 90, fill: 'forwards' }), 90);
+    stream.remove();
+    from = tilted;
   }
 
-  await wait(pourDur + 80);
-  await played(stream.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 90, fill: 'forwards' }), 90);
-  stream.remove();
-
-  const back = src.animate([{ transform: tilted }, { transform: 'translate(0px, 0px) rotate(0deg)' }], {
+  const back = src.animate([{ transform: from }, { transform: 'translate(0px, 0px) rotate(0deg)' }], {
     duration: 230,
     easing: ease,
     fill: 'forwards',
@@ -449,7 +479,7 @@ async function animatePour(i, j, res, dstLenBefore) {
   src.getAnimations().forEach((a) => a.cancel());
   src.style.zIndex = '';
   busy.delete(i);
-  busy.delete(j);
+  legs.forEach((l) => busy.delete(l.j));
 }
 
 // ================================================================ effects
@@ -677,6 +707,7 @@ function openSettings() {
        ${row('sound', 'Sound')}
        ${row('haptics', 'Haptics', 'iPhone with iOS 18 or later')}
        ${row('cb', 'Color-blind symbols', 'Adds a shape to every color')}
+       ${row('autoPour', 'Pour leftovers', 'Extra liquid goes on to other flasks of the same color')}
      </div>
      <p class="save-note">Progress is saved automatically on this device.</p>
      <div class="modal-actions">

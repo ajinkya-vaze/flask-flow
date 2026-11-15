@@ -13,7 +13,7 @@
 <h1>Engine tests</h1>
 <pre id="out">running…</pre>
 <script type="module">
-import { HIDDEN, canPour, applyPour, isWon, hasMoves, isComplete, topRun, solve, cloneState } from './js/engine.js';
+import { HIDDEN, canPour, applyPour, isWon, hasMoves, isComplete, topRun, solve, cloneState, spillTarget } from './js/engine.js';
 import { levelConfig, dailyConfig, buildLevel, prevDayKey } from './js/levels.js';
 
 const lines = []; let failed = 0;
@@ -49,6 +49,16 @@ ok(!canPour(s, 2, 3) && !canPour(s, 1, 2), 'frozen tube is locked both ways');
 r = applyPour(s, 1, 0);
 ok(r.completed.length === 1 && s.tubes[0].every((l) => l === 0), 'completed tube is fully revealed');
 ok(r.thawed.includes(2) && !s.frozen[2], 'frozen tube thaws on first completion');
+
+// --- leftovers go to other flasks of the same color
+s = S([[2, 1, 1, 1], [0, 0, 1], [3, 1], [], [0, 3]]);
+r = applyPour(s, 0, 1);
+ok(r.amount === 1, 'first leg fills the tapped flask');
+ok(spillTarget(s, 0, 2) === 2, 'leftover goes to a flask topped with that color');
+ok(spillTarget(S([[1, 1], [0, 0, 0, 1], []]), 0, 2) === -1, 'leftover never goes into an empty flask');
+ok(spillTarget(S([[1, 1, 1], [0, 0, 1], [0, 1]]), 0, 2) === 2, 'prefers the flask that takes the most');
+ok(spillTarget(S([[1, 1, 1], [0, 0, 1], [0, 1]]), 0, 2, (k) => k === 2) === 1, 'skips flasks the caller excludes');
+ok(spillTarget(S([[1, 1], [0, 1], [2, 2]], 4, [false, true, false]), 0, 2) === -1, 'leftover never goes into a frozen flask');
 
 ok(isWon(S([[0, 0, 0, 0], [], [1, 1, 1, 1]])), 'win detection');
 ok(!isWon(S([[0, 0, 0, 1], [1, 1, 1, 0]])), 'not won when mixed');

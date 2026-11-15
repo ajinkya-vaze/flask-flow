@@ -13,7 +13,7 @@ export function defaultStore() {
     level: 1,
     stars: {},
     daily: { last: null, streak: 0, done: {} },
-    settings: { sound: true, haptics: true, cb: false },
+    settings: { sound: true, haptics: true, cb: false, autoPour: true },
     seenTips: {},
     current: null,
     savedAt: 0,

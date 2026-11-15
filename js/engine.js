@@ -106,6 +106,27 @@ export function applyPour(s, i, j) {
   return { amount, color, revealed, completed, thawed };
 }
 
+/**
+ * After a pour from i that could not take the whole top run, pick another flask
+ * for the rest: one already topped with the same color (never an empty one),
+ * preferring whichever takes the most. Returns -1 if there is none.
+ */
+export function spillTarget(s, i, left, skip = () => false) {
+  if (left <= 0 || !s.tubes[i].length) return -1;
+  let best = -1;
+  let bestTake = 0;
+  for (let k = 0; k < s.tubes.length; k++) {
+    const b = s.tubes[k];
+    if (skip(k) || !b.length || !canPour(s, i, k)) continue;
+    const take = Math.min(left, s.cap - b.length);
+    if (take > bestTake) {
+      best = k;
+      bestTake = take;
+    }
+  }
+  return best;
+}
+
 export function isWon(s) {
   return s.tubes.every((t) => t.length === 0 || isComplete(t, s.cap));
 }
